@@ -25,7 +25,8 @@
 #      not get the archive's revision verdict, even when the upstream number
 #      matches (8.5.9-1+deb.sury.org+1 vs 8.5.9-0ubuntu2.1). They track
 #      upstream, so the upstream number decides. The archive row applies only
-#      to an archive-shaped debian revision (Nubuntu… or N~debNuN / N+debNuN).
+#      on the same upload spine as the fixed revision (0ubuntu0.24.04.N, not
+#      0ubuntu1 — dpkg ranks that above the security pocket).
 #   3. Never SECURE from here: a binary that differs from its package manifest
 #      (dpkg -V / rpm -V), a worker still running a binary that was replaced on
 #      disk (STALE — upgrade without restart), a worker in another root
@@ -204,7 +205,8 @@ debian_revision() {
 
 # 0 when $1 is an Ubuntu archive debian revision (1ubuntu1, 0ubuntu2.1,
 # 4ubuntu2.29+esm5) or a Debian archive revision (1~deb13u1, 1+deb12u2).
-# deb.sury.org, a PPA, and a plain -1 are not.
+# deb.sury.org, a PPA, and a plain -1 are not. Shape alone is not enough —
+# same_revision_spine rejects a different upload that merely looks Ubuntu.
 archive_debian_revision() {
   local r="$1" ure dre
   case "$r" in
@@ -218,10 +220,71 @@ archive_debian_revision() {
   return 1
 }
 
-# 0 when both versions belong to the same archive family, so a
-# dpkg --compare-versions against the vendor row is meaningful.
-# Same upstream number is not enough: 8.5.9-1+deb.sury.org+1 and
-# 8.3.6-1ppa1 share the archive's number and sort above its revision.
+_rev_nondigit() {
+  local s="$1" o="" c
+  while [ -n "$s" ]; do
+    c="${s%"${s#?}"}"
+    case "$c" in
+      [0-9]) break ;;
+      *) o="$o$c"; s="${s#?}" ;;
+    esac
+  done
+  printf '%s\n' "$o"
+}
+
+_rev_digit() {
+  local s="$1" o="" c
+  while [ -n "$s" ]; do
+    c="${s%"${s#?}"}"
+    case "$c" in
+      [0-9]) o="$o$c"; s="${s#?}" ;;
+      *) break ;;
+    esac
+  done
+  printf '%s\n' "$o"
+}
+
+# 0 when debian revisions $1 (installed) and $2 (fixed) are the same upload
+# spine. 0ubuntu0.24.04.12 and 0ubuntu0.24.04.13 are; so are 1ubuntu2 and
+# 1ubuntu2.28. 0ubuntu1 is not noble's 0ubuntu0.24.04.N — dpkg ranks 0ubuntu1
+# above that security pocket, which would be a false SECURE.
+same_revision_spine() {
+  local a="$1" b="$2" na nb da db
+  while [ -n "$a$b" ]; do
+    na="$(_rev_nondigit "$a")"
+    nb="$(_rev_nondigit "$b")"
+    [ "$na" = "$nb" ] || return 1
+    a="${a:${#na}}"
+    b="${b:${#nb}}"
+    da="$(_rev_digit "$a")"
+    db="$(_rev_digit "$b")"
+    a="${a:${#da}}"
+    b="${b:${#db}}"
+    da=$((10#${da:-0}))
+    db=$((10#${db:-0}))
+    if [ -z "$a" ] && [ -z "$b" ]; then
+      return 0
+    fi
+    if [ -z "$a" ]; then
+      # Installed revision ends here. A smaller-or-equal counter is an older
+      # archive build (1ubuntu2 before 1ubuntu2.28). A larger one is a
+      # different upload (0ubuntu1 vs 0ubuntu0.24.04.13).
+      [ "$da" -le "$db" ] || return 1
+      return 0
+    fi
+    if [ -z "$b" ]; then
+      [ "$db" -le "$da" ] || return 1
+      return 0
+    fi
+    [ "$da" -eq "$db" ] || return 1
+  done
+  return 0
+}
+
+# 0 when both versions belong to the same archive family and the same upload
+# spine, so a dpkg --compare-versions against the vendor row is meaningful.
+# Same upstream number is not enough: 8.5.9-1+deb.sury.org+1 and 8.3.6-0ubuntu1
+# share the archive's number and sort above its revision.
 same_archive_lineage() {
   local a b left=0 right=0
   a="$(debian_revision "$1")"
@@ -230,7 +293,8 @@ same_archive_lineage() {
   archive_debian_revision "$b" || return 1
   case "$a" in *ubuntu*) left=1 ;; esac
   case "$b" in *ubuntu*) right=1 ;; esac
-  [ "$left" -eq "$right" ]
+  [ "$left" -eq "$right" ] || return 1
+  same_revision_spine "$a" "$b"
 }
 
 classify_dpkg() {   # <pkg> <installed-version> <banner-version-or-empty>
@@ -259,10 +323,11 @@ classify_dpkg() {   # <pkg> <installed-version> <banner-version-or-empty>
   fi
   fixed_num="$(upstream_of "$fixed")"
   # Different upstream number → not the archive package. The same number is
-  # not proof either: deb.sury.org, a PPA, or a self-built .deb can share it,
-  # and `dpkg --compare-versions` then ranks 8.5.9-1+deb.sury.org+1 above
-  # 8.5.9-0ubuntu2.1 (and 8.3.6-1ppa1 above 8.3.6-0ubuntu0.24.04.13) — a
-  # false SECURE. The archive row applies only to an archive-shaped revision.
+  # not proof either. deb.sury.org, a PPA, a self-built .deb, or a different
+  # Ubuntu upload (8.3.6-0ubuntu1 next to 8.3.6-0ubuntu0.24.04.13) can share
+  # it, and `dpkg --compare-versions` then ranks that revision above the
+  # security pocket — a false SECURE. The archive row applies only on the
+  # same upload spine as the fixed revision.
   if [ "$num" != "$fixed_num" ] || ! same_archive_lineage "$pv" "$fixed"; then
     echo "$(assess "$num") [third-party package $pkg $pv — not the '$rel' archive build ($fixed), so the vendor revision does not apply; upstream number is the verdict]"
     return

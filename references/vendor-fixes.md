@@ -40,9 +40,10 @@ tracks upstream, so the upstream number is the verdict (`>= 8.3.36` on the 8.3
 branch). That includes a package whose upstream number **matches** the archive
 build: `8.3.6-1+ubuntu24.04.1+deb.sury.org+1` and `8.5.9-1+deb.sury.org+1` are
 not the Ubuntu backport, and a raw `dpkg --compare-versions` ranks their debian
-revision above `0ubuntu…` and would wrongly call them FIXED. `assess.sh` applies
-the archive row only when the debian revision is archive-shaped (`Nubuntu…` or
-`N~debNuN` / `N+debNuN`).
+revision above `0ubuntu…` and would wrongly call them FIXED. The same trap hits
+a different Ubuntu upload at the same upstream number: `8.3.6-0ubuntu1` sorts
+above `8.3.6-0ubuntu0.24.04.13`. `assess.sh` applies the archive row only on
+the same upload spine as the fixed revision (`0ubuntu0.24.04.N`, `1ubuntu2.N`).
 
 ## Debian
 

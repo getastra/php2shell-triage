@@ -214,6 +214,10 @@ expect "dpkg noble sury 8.3.6 same upstream" "$(classify_dpkg php8.3-fpm 8.3.6-1
 expect "dpkg noble ppa 8.3.6 same upstream"  "$(classify_dpkg php8.3-fpm 8.3.6-1ppa1 8.3.6)" "VULNERABLE -> 8.3.36 [third-party package"
 expect "dpkg noble self-built 8.3.6-1"      "$(classify_dpkg php8.3-fpm 8.3.6-1 8.3.6)" "VULNERABLE -> 8.3.36 [third-party package"
 expect "dpkg noble archive newer .14"       "$(classify_dpkg php8.3-fpm 8.3.6-0ubuntu0.24.04.14 8.3.6)" "SECURE (vendor backport"
+# Ubuntu-shaped, but a different upload. dpkg ranks these ABOVE the security
+# pocket (0ubuntu1 > 0ubuntu0.24.04.13) — that must not come out SECURE.
+expect "dpkg noble 0ubuntu1 different spine" "$(classify_dpkg php8.3-fpm 8.3.6-0ubuntu1 8.3.6)" "VULNERABLE -> 8.3.36 [third-party package"
+expect "dpkg noble 1ubuntu1 different spine" "$(classify_dpkg php8.3-fpm 8.3.6-1ubuntu1 8.3.6)" "VULNERABLE -> 8.3.36 [third-party package"
 # Binary/banner mismatch beats everything
 expect "dpkg banner mismatch"              "$(classify_dpkg php8.3-fpm 8.3.36-1+ubuntu24.04.1+deb.sury.org+1 8.3.6)"  "REVIEW (binary reports 8.3.6 but package"
 TEST_CODENAMES=jammy
@@ -221,9 +225,14 @@ expect "dpkg jammy archive fixed"          "$(classify_dpkg php8.1-fpm 8.1.2-1ub
 expect "dpkg jammy archive old"            "$(classify_dpkg php8.1-fpm 8.1.2-1ubuntu2.27 8.1.2)"           "VULNERABLE (distro update available"
 expect "dpkg jammy sury 8.1 is EOL"        "$(classify_dpkg php8.1-fpm 8.1.30-1+ubuntu22.04.1+deb.sury.org+1 8.1.30)" "EOL_VULNERABLE"
 expect "dpkg jammy sury 8.1.2 same upstream" "$(classify_dpkg php8.1-fpm 8.1.2-1+ubuntu22.04.1+deb.sury.org+1 8.1.2)" "EOL_VULNERABLE (apply 8.1 source backport or vendor LTS) [third-party package"
+# Ancestors of 1ubuntu2.28 stay on the archive row. 1ubuntu3 is a different upload.
+expect "dpkg jammy 1ubuntu1 ancestor"      "$(classify_dpkg php8.1-fpm 8.1.2-1ubuntu1 8.1.2)" "VULNERABLE (distro update available"
+expect "dpkg jammy 1ubuntu2 ancestor"      "$(classify_dpkg php8.1-fpm 8.1.2-1ubuntu2 8.1.2)" "VULNERABLE (distro update available"
+expect "dpkg jammy 1ubuntu3 different spine" "$(classify_dpkg php8.1-fpm 8.1.2-1ubuntu3 8.1.2)" "EOL_VULNERABLE (apply 8.1 source backport or vendor LTS) [third-party package"
 TEST_CODENAMES=trusty
 expect "dpkg trusty +dfsg fixed"           "$(classify_dpkg php5-fpm 5.5.9+dfsg-1ubuntu4.29+esm18 5.5.9)"  "SECURE (vendor backport"
 expect "dpkg trusty +dfsg old"             "$(classify_dpkg php5-fpm 5.5.9+dfsg-1ubuntu4.29+esm17 5.5.9)"  "VULNERABLE (distro update available"
+expect "dpkg trusty 2ubuntu1 different spine" "$(classify_dpkg php5-fpm 5.5.9+dfsg-2ubuntu1 5.5.9)" "EOL_VULNERABLE (no upstream backport — vendor ELS or decommission) [third-party package"
 TEST_CODENAMES="wilma noble"               # Linux Mint 22: VERSION_CODENAME=wilma, UBUNTU_CODENAME=noble
 expect "dpkg derivative falls back to UBUNTU_CODENAME" "$(classify_dpkg php8.3-fpm 8.3.6-0ubuntu0.24.04.13 8.3.6)" "SECURE (vendor backport"
 TEST_CODENAMES=bookworm
@@ -236,6 +245,7 @@ TEST_CODENAMES=stonking
 expect "dpkg stonking archive fixed"       "$(classify_dpkg php8.5-fpm 8.5.9-0ubuntu2.1 8.5.9)" "SECURE (vendor backport"
 expect "dpkg stonking archive old"         "$(classify_dpkg php8.5-fpm 8.5.9-0ubuntu2 8.5.9)" "VULNERABLE (distro update available"
 expect "dpkg stonking sury 8.5.9 same upstream" "$(classify_dpkg php8.5-fpm 8.5.9-1+ubuntu26.10.1+deb.sury.org+1 8.5.9)" "VULNERABLE -> 8.5.12 [third-party package"
+expect "dpkg stonking 0ubuntu3 different spine" "$(classify_dpkg php8.5-fpm 8.5.9-0ubuntu3 8.5.9)" "VULNERABLE -> 8.5.12 [third-party package"
 TEST_CODENAMES=resolute
 expect "dpkg resolute archive fixed"       "$(classify_dpkg php8.5-fpm 8.5.4-0ubuntu1.5 8.5.4)" "SECURE (vendor backport"
 expect "dpkg resolute archive old"         "$(classify_dpkg php8.5-fpm 8.5.4-0ubuntu1.4 8.5.4)" "VULNERABLE (distro update available"
