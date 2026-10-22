@@ -6,16 +6,18 @@ It is a detection-and-response skill, and it contains no exploit code. On a host
 
 ## What is in here
 
+The skill lives in `skills/php2shell-triage/`, and the paths in the table are relative to that folder. At the repo root, `.claude-plugin/` holds the plugin manifest (`plugin.json`) and the marketplace file (`marketplace.json`).
+
 | File | Purpose |
 | --- | --- |
 | `SKILL.md` | The skill itself. It contains the version matrix and the detection steps for each SAPI (the server API that runs PHP). It also contains the threat-hunting playbook, forensic capture, and the remediation roadmap. |
 | `scripts/assess.sh` | A read-only version assessor. It walks `/proc` to find the real binary behind every running web worker, and the `libphp*.so` inside Apache. It reads the version from the file without running it, and it classifies distro-owned builds by package revision. It compares each binary with its package manifest, and it flags workers that still run a replaced binary (`STALE`). It also reports containers seen from the host, and it exits 2, 1, or 0 for fleet scripts. |
-| `scripts/test_assess.sh` | Unit tests for the assessor (114 cases). They cover the version classifier, banner parsing, and static version extraction. They also cover dpkg and rpm package verdicts, with stubbed package tools. The package cases include archive against third-party builds, same-upstream sury and PPA builds, and the same upload spine (one line of archive revisions). They also include epochs, `+dfsg`, every vendor codename, and banner mismatch. Other tests cover the manifest-integrity override, and they test that the vendor table in the script matches `references/vendor-fixes.md`. |
+| `scripts/test_assess.sh` | Unit tests for the assessor (115 cases). They cover the version classifier, banner parsing, and static version extraction. They also cover dpkg and rpm package verdicts, with stubbed package tools. The package cases include archive against third-party builds, same-upstream sury and PPA builds, and the same upload spine (one line of archive revisions). They also include epochs, `+dfsg`, every vendor codename, and banner mismatch. Other tests cover the manifest-integrity override, and they test that the vendor table in the script matches `references/vendor-fixes.md`. The last test pipes the script into bash, as the Quick start does. |
 | `references/vendor-fixes.md` | A dated snapshot of vendor fixed-package revisions (Ubuntu USN and Debian). Distros backport the fix (apply it to the old version) without a change to the upstream number, so the banner cannot show it. This table gives that information. `assess.sh` has a copy of the table. If the two copies differ, the tests fail. |
 
 ## Quick start
 
-Run the assessor on the host as root, because only root can read `/proc/<pid>/exe` for workers that belong to other users.
+Run the commands in this section from `skills/php2shell-triage/`. Run the assessor on the host as root, because only root can read `/proc/<pid>/exe` for workers that belong to other users.
 
 ```bash
 bash scripts/assess.sh
@@ -72,6 +74,15 @@ For dpkg-owned binaries, the package database gives the verdict, compared agains
 - If you find no indicators, that does not prove that the host is safe. PHP2Shell is a memory-corruption flaw, and a successful exploit can leave no artifact on disk. Before you report a host as clean, read §4 of `SKILL.md`.
 - Only a patch fixes the flaw completely. The interim mitigations in §3.3 make the attack surface smaller, but they do not repair the bug. Use them only until you upgrade.
 
-## Using it as a Claude / Cowork skill
+## Install as a Claude skill
 
-Put the `php2shell-triage/` folder where your client loads skills from. The client finds the skill through the `name` and `description` fields in the frontmatter of `SKILL.md`. The skill triggers on the CVE identifiers and the name "PHP2Shell". It also triggers on version identification across SAPIs, and on hunts for indicators of compromise (IoCs).
+This repo is a Claude Code plugin, and it is also its own marketplace (a catalog that Claude Code installs plugins from). To install the plugin in Claude Code, run these two commands:
+
+```
+/plugin marketplace add getastra/php2shell-triage
+/plugin install php2shell-triage@astra-security-skills
+```
+
+The skill then appears as `/php2shell-triage:php2shell-triage`. Claude finds the skill through the `name` and `description` fields in the frontmatter of `SKILL.md`. It triggers on the CVE identifiers and the name "PHP2Shell". It also triggers on version identification across SAPIs, and on hunts for indicators of compromise (IoCs).
+
+To use the skill without the plugin, copy `skills/php2shell-triage/` into `~/.claude/skills/` for your user, or into `.claude/skills/` for one project. For claude.ai, zip the `php2shell-triage/` folder so that the folder is at the root of the zip. Then upload the zip under Customize > Skills > "+" > Create skill > Upload a skill.
