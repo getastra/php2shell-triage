@@ -2,7 +2,7 @@
   "name": "astra-security-skills",
   "description": "Defensive security skills from Astra for incident triage and remediation.",
   "owner": {
-    "name": "Astra"
+    "name": "Astra Security"
   },
   "plugins": [
     {
