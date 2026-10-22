@@ -10,7 +10,7 @@ This is a detection-and-response skill. It helps a defender answer three questio
 | --- | --- |
 | `SKILL.md` | The skill itself: version matrix, SAPI-aware detection, IoC threat-hunting playbook, forensic capture, and the remediation roadmap. |
 | `scripts/assess.sh` | Read-only version assessor. Walks `/proc` to resolve every running web worker (and the `libphp*.so` inside Apache) to its real binary, reads the version from the file without executing it, classifies distro-owned builds by package revision, checks the package manifest, flags workers still running a replaced binary (`STALE`) and containers seen from the host, and exits 2/1/0 for fleet scripting. |
-| `scripts/test_assess.sh` | Unit tests for the assessor (83 cases): the version classifier, banner parsing, static version extraction, dpkg/rpm package verdicts with stubbed package tools (archive vs. third-party, epoch, `+dfsg`, derivative codenames, banner mismatch), the manifest-integrity override, and parity between the vendor table in the script and `references/vendor-fixes.md`. |
+| `scripts/test_assess.sh` | Unit tests for the assessor (107 cases): the version classifier, banner parsing, static version extraction, dpkg/rpm package verdicts with stubbed package tools (archive vs. third-party, same-upstream sury/PPA, epoch, `+dfsg`, every vendor codename, banner mismatch), the manifest-integrity override, and parity between the vendor table in the script and `references/vendor-fixes.md`. |
 | `references/vendor-fixes.md` | Dated snapshot of vendor fixed-package revisions (Ubuntu USN, Debian). Distros backport without bumping the upstream number — this table is what the banner cannot tell you. Mirrored in `assess.sh`; the tests fail if the two drift. |
 
 ## Quick start
@@ -29,9 +29,9 @@ docker exec -i CONTAINER bash -s < scripts/assess.sh
 kubectl exec -i POD -- bash -s < scripts/assess.sh
 ```
 
-It prints one line per PHP it finds — CLI, PHP-FPM, php-cgi, `lsphp`, FrankenPHP, Apache `mod_php` (resolved from the process' memory map), installed-but-idle binaries, and containerised workers visible from the host — with a `SECURE` / `VULNERABLE` / `EOL_VULNERABLE` / `REVIEW` / `STALE` / `INFO` status, then a `SUMMARY:` line. For distro-owned binaries the verdict comes from the **package revision** (dpkg/rpm) against `references/vendor-fixes.md`; third-party packages (deb.sury.org, PPAs, Remi) and custom builds are judged by upstream number. `STALE` is a worker still running a binary that was replaced on disk — upgrade without restart. For images without bash (alpine/distroless), not-running images, and registry scans, see SKILL.md §1.3.
+It prints one line per PHP it finds — CLI, PHP-FPM, php-cgi, `lsphp`, FrankenPHP, Apache `mod_php` (resolved from the process' memory map), installed-but-idle binaries, and containerised workers visible from the host — with a `SECURE` / `VULNERABLE` / `EOL_VULNERABLE` / `REVIEW` / `STALE` / `INFO` status, then a `SUMMARY:` line. For distro-owned binaries the verdict comes from the **package revision** (dpkg/rpm) against `references/vendor-fixes.md`. Third-party packages (deb.sury.org, PPAs, a self-built .deb, Remi) and custom builds are judged by upstream number, including when that number matches the archive build. `STALE` is a worker still running a binary that was replaced on disk — upgrade without restart. For images without bash (alpine/distroless), not-running images, and registry scans, see SKILL.md §1.3.
 
-Exit code: **2** = something VULNERABLE, **1** = REVIEW / STALE / not run as root, **0** = everything found is SECURE — so `ssh root@$h 'bash -s' < scripts/assess.sh; echo $?` is a fleet check.
+Exit code: **2** = a `VULNERABLE` or `EOL_VULNERABLE` row, including a `STALE` worker still running one of those binaries, **1** = `REVIEW`, a `STALE` worker whose in-memory version is not vulnerable, or not run as root, **0** = everything found is SECURE — so `ssh root@$h 'bash -s' < scripts/assess.sh; echo $?` is a fleet check.
 
 Verify the classifier before you trust it:
 

@@ -21,8 +21,11 @@
 #   2. Package-owned binary (dpkg/rpm) → the package REVISION decides, compared
 #      against vendor_fixed_rev (mirrors references/vendor-fixes.md): Ubuntu
 #      24.04's fixed build still reports 8.3.6 (package 8.3.6-0ubuntu0.24.04.13).
-#      Third-party packages (deb.sury.org / PPA / Remi) do not get the archive's
-#      revision verdict — they track upstream, so the upstream number decides.
+#      Third-party packages (deb.sury.org / PPA / a self-built .deb / Remi) do
+#      not get the archive's revision verdict, even when the upstream number
+#      matches (8.5.9-1+deb.sury.org+1 vs 8.5.9-0ubuntu2.1). They track
+#      upstream, so the upstream number decides. The archive row applies only
+#      to an archive-shaped debian revision (Nubuntu… or N~debNuN / N+debNuN).
 #   3. Never SECURE from here: a binary that differs from its package manifest
 #      (dpkg -V / rpm -V), a worker still running a binary that was replaced on
 #      disk (STALE — upgrade without restart), a worker in another root
@@ -30,7 +33,10 @@
 #   4. mod_php is resolved from the Apache process' memory map (libphp*.so),
 #      not guessed.
 #
-# Exit code: 2 = something VULNERABLE, 1 = REVIEW / STALE / incomplete,
+# Exit code: 2 = a VULNERABLE or EOL_VULNERABLE row, including a STALE worker
+#            whose in-memory version is still one of those.
+#            1 = REVIEW, a STALE worker whose in-memory version is not
+#            vulnerable, or incomplete (not root).
 #            0 = everything found is SECURE.
 # Classifier functions are unit-tested by scripts/test_assess.sh — keep them in
 # sync if you change the version matrix.
@@ -115,11 +121,17 @@ run_timeout() { if command -v timeout >/dev/null 2>&1; then timeout 5 "$@"; else
 # Read PHP_VERSION from a binary WITHOUT executing it. Works on a path, on
 # /proc/<pid>/exe (even when the file was deleted/replaced on disk), on a
 # container's binary via /proc/<pid>/root/…, and on libphp*.so. No `strings`
-# dependency (tr + grep are everywhere, including busybox).
+# dependency. grep -a -m1 stops at the first match instead of rewriting the
+# whole file; the class is the version token (PHP stores it as a C string).
+# Busybox grep has -a, -m, -o, and -E. Do not widen the class to [^\0] —
+# that does not stop at NUL, and the match would keep the "X-Powered-By:" prefix.
 static_banner() {
   [ -r "$1" ] || return 0
-  LC_ALL=C tr -c '[:print:]' '\n' < "$1" 2>/dev/null \
-    | grep -oE 'X-Powered-By: PHP/[0-9][0-9A-Za-z.~+-]*' | head -n1 | sed 's|.*/||'
+  local v
+  # `|| :` keeps a match when head closes the pipe (SIGPIPE under pipefail).
+  v="$(LC_ALL=C grep -a -m1 -oE 'X-Powered-By: PHP/[0-9][0-9A-Za-z.~+-]*' -- "$1" 2>/dev/null \
+        | head -n1 | sed 's|.*/||')" || :
+  printf '%s\n' "$v"
 }
 
 # Pull "x.y.z[-suffix]" out of `-v` output: the first line carrying "PHP <digit>",
@@ -170,11 +182,55 @@ vendor_fixed_rev() {   # vendor_fixed_rev <branch> <release-codename> -> fixed r
 # Ubuntu base in UBUNTU_CODENAME — try both.
 os_codenames() {
   local vc="" uc=""
+  # Sourced in a subshell, so assignments do not leak, but commands in the
+  # file would run as this user. This is acceptable only because the operator
+  # owns the host and trusts its root filesystem — an attacker who can rewrite
+  # /etc/os-release is already root.
   if [ -r /etc/os-release ]; then
     read -r vc uc < <( . /etc/os-release 2>/dev/null
                        printf '%s %s\n' "${VERSION_CODENAME:-unknown}" "${UBUNTU_CODENAME:-}" )
   fi
   printf '%s %s\n' "${vc:-unknown}" "$uc"
+}
+
+# Debian revision (after the last hyphen). Epoch is ignored.
+debian_revision() {
+  local s="${1#*:}"
+  case "$s" in
+    *-*) printf '%s\n' "${s##*-}" ;;
+    *) printf '\n' ;;
+  esac
+}
+
+# 0 when $1 is an Ubuntu archive debian revision (1ubuntu1, 0ubuntu2.1,
+# 4ubuntu2.29+esm5) or a Debian archive revision (1~deb13u1, 1+deb12u2).
+# deb.sury.org, a PPA, and a plain -1 are not.
+archive_debian_revision() {
+  local r="$1" ure dre
+  case "$r" in
+    *sury*|*ppa*|*ondrej*|*remi*) return 1 ;;
+  esac
+  # Unquoted on purpose: bash 3.2 treats a quoted =~ operand as a literal string.
+  ure='^[0-9]+ubuntu[0-9.]*[0-9]([+]esm[0-9]+)?$'
+  dre='^[0-9]+[~+]deb[0-9]+u[0-9]+$'
+  [[ "$r" =~ $ure ]] && return 0
+  [[ "$r" =~ $dre ]] && return 0
+  return 1
+}
+
+# 0 when both versions belong to the same archive family, so a
+# dpkg --compare-versions against the vendor row is meaningful.
+# Same upstream number is not enough: 8.5.9-1+deb.sury.org+1 and
+# 8.3.6-1ppa1 share the archive's number and sort above its revision.
+same_archive_lineage() {
+  local a b left=0 right=0
+  a="$(debian_revision "$1")"
+  b="$(debian_revision "$2")"
+  archive_debian_revision "$a" || return 1
+  archive_debian_revision "$b" || return 1
+  case "$a" in *ubuntu*) left=1 ;; esac
+  case "$b" in *ubuntu*) right=1 ;; esac
+  [ "$left" -eq "$right" ]
 }
 
 classify_dpkg() {   # <pkg> <installed-version> <banner-version-or-empty>
@@ -202,12 +258,12 @@ classify_dpkg() {   # <pkg> <installed-version> <banner-version-or-empty>
     return
   fi
   fixed_num="$(upstream_of "$fixed")"
-  if [ "$num" != "$fixed_num" ]; then
-    # A different upstream number than the archive build means this is NOT the
-    # archive package (deb.sury.org, a PPA, a self-built .deb). Those track
-    # upstream, so the archive's revision row does not apply — and a plain
-    # `dpkg --compare-versions` would wrongly rank 8.3.35-…sury… above
-    # 8.3.6-0ubuntu0.24.04.13. The upstream number is the verdict.
+  # Different upstream number → not the archive package. The same number is
+  # not proof either: deb.sury.org, a PPA, or a self-built .deb can share it,
+  # and `dpkg --compare-versions` then ranks 8.5.9-1+deb.sury.org+1 above
+  # 8.5.9-0ubuntu2.1 (and 8.3.6-1ppa1 above 8.3.6-0ubuntu0.24.04.13) — a
+  # false SECURE. The archive row applies only to an archive-shaped revision.
+  if [ "$num" != "$fixed_num" ] || ! same_archive_lineage "$pv" "$fixed"; then
     echo "$(assess "$num") [third-party package $pkg $pv — not the '$rel' archive build ($fixed), so the vendor revision does not apply; upstream number is the verdict]"
     return
   fi
@@ -295,6 +351,7 @@ row() {   # row <label> <version> <status> — prints and tallies for the exit c
     SECURE*)                     n_secure=$((n_secure+1)) ;;
     VULNERABLE*|EOL_VULNERABLE*) n_vuln=$((n_vuln+1)) ;;
     STALE*)                      n_stale=$((n_stale+1))
+                                 # In-memory VULNERABLE / EOL_VULNERABLE still exits 2.
                                  case "$3" in *VULNERABLE*) n_vuln=$((n_vuln+1)) ;; esac ;;
     INFO*)                       : ;;
     *)                           n_review=$((n_review+1)) ;;
@@ -315,6 +372,10 @@ mark_seen() {   # mark_seen <path> → 0 if new, 1 if already reported (keyed by
 # /proc/<pid>/exe; its package database is reachable via /proc/<pid>/root.
 report_foreign() {   # <pid> <name> <path-inside-its-root>
   local pid="$1" name="$2" inside="$3" root="/proc/$1/root" cg v where
+  # First 64-hex token: Docker (docker-<id>.scope), containerd
+  # (cri-containerd-<id>.scope), CRI-O (crio-<id>.scope). A name-based runtime,
+  # or a pod slice that only has a UUID, leaves this empty — the row still
+  # shows the pid (`container ? pid N`).
   cg="$(grep -oE '[0-9a-f]{64}' "/proc/$pid/cgroup" 2>/dev/null | head -n1 | cut -c1-12)"
   where="container ${cg:-?} pid $pid"
   v="$(static_banner "/proc/$pid/exe")"

@@ -84,20 +84,22 @@ kubectl exec -i POD -- bash -s < scripts/assess.sh
 # Verify the classifier before relying on it (exit 0 = all pass):
 bash scripts/test_assess.sh
 
-# Fleet runs: the exit code is the verdict — 2 = something VULNERABLE,
-# 1 = REVIEW / STALE / incomplete (not root), 0 = everything found is SECURE.
-for h in web01 web02; do echo "== $h"; ssh root@$h 'bash -s' < scripts/assess.sh | tail -n1; done
+# Fleet runs: exit 2 = VULNERABLE or EOL_VULNERABLE, including a STALE worker
+# still running one of those. Exit 1 = REVIEW, a STALE worker whose in-memory
+# version is not vulnerable, or incomplete (not root). Exit 0 = all SECURE.
+# Do not pipe the ssh away — the pipeline would hide the exit code.
+for h in web01 web02; do echo "== $h"; ssh root@$h 'bash -s' < scripts/assess.sh; echo "exit=$?"; done
 ```
 
 What it does, and why this way:
 
 - Resolves **every running web worker to its actual binary** via a `/proc` walk (no `pgrep` — the official `php:*` images do not ship procps) and reports *that* version — because the web SAPI, not the `php` in `$PATH`, is what is exposed. A host can show a patched CLI `php` while the FPM/mod_php worker serving traffic is vulnerable.
 - **Reads the version without executing the binary.** PHP compiles `X-Powered-By: PHP/<version>` into every SAPI binary and `libphp*.so`; the script extracts that constant. `$exe -v` (under `timeout 5`) is only the fallback when the constant is absent — so on a suspect host the assessor is no longer running the suspect code as root.
-- Classifies **distro-owned binaries via the package database** (dpkg/rpm), comparing the installed package revision against the vendor fix table (`references/vendor-fixes.md`). Third-party packages (deb.sury.org, PPAs, Remi) have a different upstream number than the archive build, so the archive's revision row is **not** applied to them — they track upstream and the upstream number decides. The banner only decides for custom/php.net builds.
+- Classifies **distro-owned binaries via the package database** (dpkg/rpm), comparing the installed package revision against the vendor fix table (`references/vendor-fixes.md`). The archive row applies only to an archive-shaped revision (`Nubuntu…`, `N~debNuN`). Third-party packages (deb.sury.org, PPAs, a self-built .deb, Remi) are judged by the upstream number even when that number matches the archive build — `8.3.6-1+deb.sury.org+1` is not Ubuntu's `8.3.6-0ubuntu0.24.04.13`. The banner only decides for custom/php.net builds.
 - **Checks the package manifest** (`dpkg -V` / `rpm -V`): a binary that differs from what the package installed, or whose banner disagrees with its owning package, reads `REVIEW` — tampered, hand-replaced, or half-upgraded — regardless of the package revision.
-- **Catches the upgrade-without-restart case.** A worker whose binary was replaced on disk after it started (`/proc/<pid>/exe` → `(deleted)`) is reported as `STALE` with the version still in memory. That is exactly the §3.1 failure mode and it never reads `SECURE`.
+- **Catches the upgrade-without-restart case.** A worker whose binary was replaced on disk after it started (`/proc/<pid>/exe` → `(deleted)`) is reported as `STALE` with the version still in memory. That is exactly the §3.1 failure mode and it never reads `SECURE`. If that in-memory version is `VULNERABLE` or `EOL_VULNERABLE`, the process exits 2.
 - **Resolves mod_php for real**: the `libphp*.so` mapped into Apache's memory (`/proc/<pid>/maps`) is classified like any other binary, including the deleted/replaced case. Apache with no `libphp` mapped (proxying to FPM) is an `INFO` row.
-- **Sees containers from the host.** A worker whose binary is not the same file on this root filesystem is reported as `container <id>` with its in-memory version. Upstream/Alpine builds get a banner verdict; a container whose PHP is dpkg/rpm-managed reads `REVIEW` with the instruction to run the assessor inside it.
+- **Sees containers from the host.** A worker whose binary is not the same file on this root filesystem is reported as `container <id>` with its in-memory version. The id is the first 12 characters of a 64-hex cgroup token (Docker, containerd, CRI-O). A name-based runtime, or a pod slice that only has a UUID, prints `container ?`; the pid is still on the row. Upstream/Alpine builds get a banner verdict; a container whose PHP is dpkg/rpm-managed reads `REVIEW` with the instruction to run the assessor inside it.
 - Covers CLI, PHP-FPM, php-cgi, `lsphp`, FrankenPHP, mod_php, and installed-but-idle binaries under distro, source-build, cPanel/CloudLinux/Plesk/Remi and LiteSpeed paths.
 - **Fails safe.** Unparseable, truncated, pre-release, or newer-than-known versions return `REVIEW` or `VULNERABLE`, never `SECURE`. A distro-suffixed version whose upstream number looks vulnerable reads `REVIEW` too — the vendor may have backported the fix, and only the package revision can answer. Not running as root prints a warning and marks the result `INCOMPLETE` (other users' workers are invisible) — the exit code is then never 0.
 - Linux-oriented (uses `/proc`); it refuses to run elsewhere and prints the pipe command instead. Windows/macOS hosts: use the manual checks in §5.
@@ -401,7 +403,7 @@ dpkg -V 'php8.3-*' 'libapache2-mod-php*' 2>/dev/null || rpm -Va 'php*' 2>/dev/nu
 
 - **Version coverage is only as complete as enumeration.** §1.2 covers the processes and files it can see on this host. A worker it cannot classify is printed as `REVIEW`, never dropped — but a PHP that is not running and not under a known install path (a custom prefix, a chroot, an image not deployed anywhere) is simply absent from the report. Containers appear from the host as triage rows only; run the assessor inside. `/proc/<pid>/exe`, `maps` and `root` need root for other users' processes — the report says `INCOMPLETE` otherwise.
 - **mod_php is resolved from Apache's memory map** (`libphp*.so` in `/proc/<pid>/maps`), which needs root. Without it the Apache row reads `REVIEW`; confirm via a `phpinfo()` page or package metadata.
-- **`STALE` means restart, not "vulnerable" and not "secure".** The row shows the version still in memory; the on-disk package may already be fixed. Restart the service and re-run — the verdict is whatever the fresh worker reports.
+- **`STALE` means the worker is still running the replaced binary.** The row is not `SECURE`. The parenthetical text is the version still in memory; when that version is `VULNERABLE` or `EOL_VULNERABLE` the process exits 2, and otherwise the `STALE` row exits 1. Restart the service and re-run — the verdict is whatever the fresh worker reports.
 - **Absence of IoCs is not proof of safety.** The core of this attack is in-memory corruption — a successful exploit can leave **no disk artifact**(no webshell, no session file). Rely on crash/OOM/segfault telemetry (§2.1), WAF/body logging where available (§2.2), and the assumption that any exposed, unpatched, internet-facing host may be compromised: working exploits circulated **before** the patch and mass scanning was expected within minutes of release.
 - **Body-dependent hunts under-report.** §2.2 only works where request bodies/headers are logged. On a default access-log setup those greps return nothing even under active attack.
 - **Interim mitigations are partial** by the PHP team's own statement, and a PHP core developer stated the official patch is the only permanent defense. Do not report a mitigated-but-unpatched host as remediated.
