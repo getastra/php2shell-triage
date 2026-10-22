@@ -1,0 +1,11 @@
+{
+  "name": "php2shell-triage",
+  "version": "1.0.0",
+  "description": "Defensive triage for PHP2Shell (CVE-2026-109618, CVE-2026-109619): a read-only check of every PHP SAPI, plus indicator hunting and a patch plan.",
+  "author": {
+    "name": "Astra Security"
+  },
+  "repository": "https://github.com/getastra/php2shell-triage",
+  "license": "MIT",
+  "keywords": ["php", "security", "cve", "incident-response", "threat-hunting"]
+}

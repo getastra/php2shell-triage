@@ -1,0 +1,14 @@
+{
+  "name": "astra-security-skills",
+  "description": "Defensive security skills from Astra Security for incident triage and remediation.",
+  "owner": {
+    "name": "Astra Security"
+  },
+  "plugins": [
+    {
+      "name": "php2shell-triage",
+      "source": "./",
+      "description": "Defensive triage for PHP2Shell (CVE-2026-109618, CVE-2026-109619): a read-only check of every PHP SAPI, plus indicator hunting and a patch plan."
+    }
+  ]
+}

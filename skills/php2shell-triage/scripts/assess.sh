@@ -392,8 +392,15 @@ status_of() {
 }
 
 # When sourced (e.g. by the test harness), stop here — define functions only.
-# shellcheck disable=SC2128
-[ "${BASH_SOURCE[0]}" != "${0}" ] && return 0 2>/dev/null
+# Quick start is `bash -s < scripts/assess.sh`: the file is on stdin, so
+# BASH_SOURCE[0] is unset and $0 is "bash". Comparing ${BASH_SOURCE[0]} under
+# `set -u` aborts here ("unbound variable") and the assessor never runs.
+# ${array[0]:-} does not silence that on bash 4.2/4.3 either. `return` is legal
+# only in a function or a sourced script; a subshell inherits that, so the
+# probe succeeds only when this file was sourced.
+if (return 0 2>/dev/null); then
+  return 0
+fi
 
 # ------------------------------------------------------------------- report
 

@@ -305,6 +305,17 @@ n_fn="$(grep -cE '^[[:space:]]*php[0-9.]*:[a-z]+\)[[:space:]]+echo' "$here/asses
 expect "vendor table row count (doc=$n_ref fn=$n_fn)" "[$n_fn]" "[$n_ref]"
 expect "vendor table not empty" "$([ "$n_ref" -gt 0 ] && echo ok)" "ok"
 
+# ============================================ piped mode (Quick start)
+# `bash -s < assess.sh` leaves BASH_SOURCE empty. The source guard must not
+# trip `set -u`, and the report must start (Linux) or refuse cleanly (other OS).
+piped="$(bash -s < "$here/assess.sh" 2>&1 | head -n 3)"
+case "$piped" in
+  *"unbound variable"*) piped_ok="unbound: $piped" ;;
+  *"== PHP2Shell exposure assessment =="*|*"ERROR: this assessor runs on Linux only"*) piped_ok=ok ;;
+  *) piped_ok="unexpected: $piped" ;;
+esac
+expect "piped bash -s gets past the source guard" "$piped_ok" "ok"
+
 echo "----------------------------------------"
 echo "PASS: $pass   FAIL: $fail"
 [ "$fail" -eq 0 ]
